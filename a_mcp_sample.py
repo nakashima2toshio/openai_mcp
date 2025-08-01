@@ -187,7 +187,8 @@ with tab1:
                     with st.spinner("Redisデータを取得中..."):
                         # セッションデータ
                         st.write("**🔑 セッションデータ:**")
-                        session_keys = r.keys('session:*')
+                        # session_keys = r.keys('session:*')
+                        session_keys = cast(list[str], r.keys('session:*'))
                         if session_keys:
                             session_data = []
                             for key in sorted(session_keys):
@@ -202,7 +203,8 @@ with tab1:
 
                         # カウンタデータ
                         st.write("**📊 カウンタデータ:**")
-                        counter_keys = r.keys('counter:*')
+                        # counter_keys = r.keys('counter:*')
+                        counter_keys = cast(list[str], r.keys('counter:*'))
                         if counter_keys:
                             counter_data = {}
                             for key in sorted(counter_keys):
@@ -235,7 +237,8 @@ with tab1:
 
                         # ユーザープロファイル
                         st.write("**👤 ユーザープロファイル:**")
-                        profile_keys = r.keys('profile:*')
+                        # profile_keys = r.keys('profile:*')
+                        profile_keys = cast(list[str], r.keys('profile:*'))
                         if profile_keys:
                             for key in sorted(profile_keys):
                                 profile_data = json.loads(r.get(key))
