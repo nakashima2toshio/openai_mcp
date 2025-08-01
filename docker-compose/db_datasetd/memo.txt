@@ -1,0 +1,4 @@
+
+docker-compose -f docker-compose.mcp-demo.yml down
+
+docker-compose -f docker-compose.mcp-demo.yml up -d
