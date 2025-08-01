@@ -5,7 +5,8 @@ import os
 import json
 import pandas as pd
 from dotenv import load_dotenv
-import redis
+# import redis
+from redis import client as redis_client   # 同期クライアントを明示
 import psycopg2
 import requests
 from datetime import datetime
@@ -182,13 +183,15 @@ with tab1:
         if st.button("Redis データを表示", key="show_redis"):
             if "🟢" in status.get('Redis', ''):
                 try:
-                    r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-
+                    # r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+                    r: redis_client.Redis = redis_client.Redis(
+                        host='localhost', port=6379, db=0, decode_responses=True
+                    )
                     with st.spinner("Redisデータを取得中..."):
                         # セッションデータ
                         st.write("**🔑 セッションデータ:**")
                         # session_keys = r.keys('session:*')
-                        session_keys = cast(list[str], r.keys('session:*'))
+                        session_keys: list[str] = list(r.scan_iter('session:*'))
                         if session_keys:
                             session_data = []
                             for key in sorted(session_keys):
@@ -204,7 +207,7 @@ with tab1:
                         # カウンタデータ
                         st.write("**📊 カウンタデータ:**")
                         # counter_keys = r.keys('counter:*')
-                        counter_keys = cast(list[str], r.keys('counter:*'))
+                        counter_keys: list[str] = list(r.scan_iter('counter:*'))
                         if counter_keys:
                             counter_data = {}
                             for key in sorted(counter_keys):
@@ -238,7 +241,7 @@ with tab1:
                         # ユーザープロファイル
                         st.write("**👤 ユーザープロファイル:**")
                         # profile_keys = r.keys('profile:*')
-                        profile_keys = cast(list[str], r.keys('profile:*'))
+                        profile_keys: list[str] = list(r.scan_iter('profile:*'))
                         if profile_keys:
                             for key in sorted(profile_keys):
                                 profile_data = json.loads(r.get(key))
@@ -1075,3 +1078,5 @@ st.markdown("""
     <p>Made with ❤️ using Streamlit</p>
 </div>
 """, unsafe_allow_html=True)
+
+# streamlit run a_mcp_sample.py --server.port=8501
