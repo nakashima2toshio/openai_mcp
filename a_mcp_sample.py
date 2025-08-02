@@ -157,6 +157,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "⚙️ 設定"
 ])
 
+# ---------------------------------
+# tab1 = データ確認
+# ---------------------------------
 with tab1:
     st.write("📊 投入されたテストデータの確認")
 
@@ -389,8 +392,19 @@ with tab1:
 
                         if 'product_embeddings' in collection_names:
                             # コレクションが存在する場合のみデータ取得
-                            points_response = requests.get(
-                                'http://localhost:6333/collections/product_embeddings/points?limit=10')
+                            # points_response = requests.get(
+                            #     'http://localhost:6333/collections/product_embeddings/points?limit=10')
+                            # 修正版
+                            scroll_payload = {
+                                "limit"       : 10,
+                                "with_payload": True,
+                                "with_vector" : False
+                            }
+                            points_response = requests.post(
+                                'http://localhost:6333/collections/product_embeddings/points/scroll',
+                                json=scroll_payload,
+                                headers={'Content-Type': 'application/json'}
+                            )
 
                             if points_response.status_code == 200:
                                 data = points_response.json()
@@ -437,6 +451,9 @@ with tab1:
         else:
             st.warning("Qdrant サーバーに接続できません")
 
+# ---------------------------------
+# tab2 = AI アシスタント
+# ---------------------------------
 with tab2:
     st.header("🤖 AI アシスタント（MCP経由）")
 
@@ -891,7 +908,7 @@ with tab3:
                     st.error(f"エラー: {e}")
             else:
                 st.warning("Qdrant サーバーに接続できません")
-
+# ------------------------
 with tab4:
     st.header("📈 データ分析とダッシュボード")
 
