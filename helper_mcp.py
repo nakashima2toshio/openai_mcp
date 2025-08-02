@@ -16,6 +16,67 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from abc import ABC, abstractmethod
 
+# 必要なライブラリの確認
+try:
+    import requests
+except ImportError:
+    st.error("requests ライブラリが必要です: pip install requests")
+
+try:
+    import pandas as pd
+except ImportError:
+    st.error("pandas ライブラリが必要です: pip install pandas")
+
+
+# ==================================================
+# ユーティリティ関数
+# ==================================================
+def safe_get_secret(key: str, default: Any = None) -> Any:
+    """Streamlit secretsから安全に値を取得"""
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        # secrets.toml が存在しない場合は環境変数を使用
+        return os.getenv(key, default)
+
+
+def safe_format_number(value: Any, use_comma: bool = True) -> str:
+    """数値を安全にフォーマット"""
+    try:
+        if value is None:
+            return "0"
+
+        # 数値型に変換を試行
+        if isinstance(value, (int, float)):
+            num_value = value
+        else:
+            # 文字列から数値への変換を試行
+            num_value = float(value)
+
+        # カンマ区切りフォーマット
+        if use_comma:
+            # 小数点以下がある場合の処理
+            if isinstance(num_value, float) and num_value != int(num_value):
+                return f"{num_value:,.0f}"
+            else:
+                return f"{int(num_value):,}"
+        else:
+            return str(int(num_value))
+
+    except (ValueError, TypeError):
+        # 変換に失敗した場合は文字列として返す
+        return str(value) if value is not None else "N/A"
+
+
+def safe_format_metric(label: str, value: Any, suffix: str = "", prefix: str = "", use_comma: bool = True) -> None:
+    """Streamlitメトリクスを安全に表示"""
+    try:
+        formatted_value = safe_format_number(value, use_comma)
+        display_value = f"{prefix}{formatted_value}{suffix}"
+        st.metric(label, display_value)
+    except Exception as e:
+        st.metric(label, f"エラー: {e}")
+
 
 # ==================================================
 # 設定とセッション管理
@@ -63,9 +124,9 @@ class RedisManager(DatabaseManager):
 
     def __init__(self):
         super().__init__("Redis")
-        self.host = 'localhost'
-        self.port = 6379
-        self.db = 0
+        self.host = safe_get_secret('REDIS_HOST', 'localhost')
+        self.port = int(safe_get_secret('REDIS_PORT', 6379))
+        self.db = int(safe_get_secret('REDIS_DB', 0))
 
     def check_connection(self) -> Dict[str, str]:
         """Redis接続状態をチェック"""
@@ -136,10 +197,14 @@ class PostgreSQLManager(DatabaseManager):
 
     def __init__(self):
         super().__init__("PostgreSQL")
-        self.conn_str = st.secrets.get('PG_CONN_STR') or os.getenv('PG_CONN_STR')
+        # secrets.toml が存在しない場合のエラーを回避
+        self.conn_str = safe_get_secret('PG_CONN_STR', os.getenv('PG_CONN_STR'))
 
     def check_connection(self) -> Dict[str, str]:
         """PostgreSQL接続状態をチェック"""
+        if not self.conn_str:
+            return {"status": "🔴 接続NG", "details": "接続文字列が設定されていません"}
+
         try:
             conn = psycopg2.connect(self.conn_str, connect_timeout=3)
             conn.close()
@@ -149,6 +214,9 @@ class PostgreSQLManager(DatabaseManager):
 
     def get_data_summary(self) -> Dict[str, Any]:
         """PostgreSQLデータの概要取得"""
+        if not self.conn_str:
+            return {"table_count": "?", "status": "error", "message": "接続文字列未設定"}
+
         try:
             engine = sqlalchemy.create_engine(self.conn_str)
 
@@ -170,6 +238,10 @@ class PostgreSQLManager(DatabaseManager):
 
     def get_detailed_data(self) -> Dict[str, Any]:
         """PostgreSQL詳細データ取得"""
+        if not self.conn_str:
+            st.error("PostgreSQL接続文字列が設定されていません")
+            return {}
+
         try:
             engine = sqlalchemy.create_engine(self.conn_str)
 
@@ -204,7 +276,7 @@ class ElasticsearchManager(DatabaseManager):
 
     def __init__(self):
         super().__init__("Elasticsearch")
-        self.url = 'http://localhost:9200'
+        self.url = safe_get_secret('ELASTIC_URL', os.getenv('ELASTIC_URL', 'http://localhost:9200'))
 
     def check_connection(self) -> Dict[str, str]:
         """Elasticsearch接続状態をチェック"""
@@ -280,7 +352,7 @@ class QdrantManager(DatabaseManager):
 
     def __init__(self):
         super().__init__("Qdrant")
-        self.url = 'http://localhost:6333'
+        self.url = safe_get_secret('QDRANT_URL', os.getenv('QDRANT_URL', 'http://localhost:6333'))
 
     def check_connection(self) -> Dict[str, str]:
         """Qdrant接続状態をチェック"""
@@ -499,8 +571,6 @@ class DataViewPage(PageManager):
                         with counter_cols[i % 2]:
                             st.metric(key.replace('_', ' ').title(), value)
 
-                # その他のデータも表示
-
     def _render_postgresql_details(self):
         """PostgreSQL詳細表示"""
         st.subheader("🟦 PostgreSQL データ")
@@ -517,21 +587,219 @@ class DataViewPage(PageManager):
                     st.write("**🛒 注文データ:**")
                     st.dataframe(data['orders'], use_container_width=True)
 
-                # その他のデータも表示
-
     def _render_elasticsearch_details(self):
         """Elasticsearch詳細表示"""
         st.subheader("🟡 Elasticsearch データ")
         if st.button("Elasticsearch データを表示", key="show_elasticsearch"):
-            # 実装は元のコードと同様
-            pass
+            es_manager = self.status_manager.get_manager('Elasticsearch')
+            status = es_manager.check_connection()
+
+            if "🟢" in status["status"]:
+                with st.spinner("Elasticsearchデータを取得中..."):
+                    try:
+                        # インデックス一覧を取得
+                        response = requests.get(f'{es_manager.url}/_cat/indices?format=json', timeout=5)
+                        if response.status_code == 200:
+                            indices_data = response.json()
+
+                            st.write("**📋 インデックス一覧:**")
+                            if indices_data:
+                                df_indices = pd.DataFrame(indices_data)
+                                # 主要な列のみ表示
+                                display_columns = ['index', 'docs.count', 'store.size', 'status']
+                                available_columns = [col for col in display_columns if col in df_indices.columns]
+                                if available_columns:
+                                    st.dataframe(df_indices[available_columns], use_container_width=True)
+                                else:
+                                    st.dataframe(df_indices, use_container_width=True)
+                            else:
+                                st.info("インデックスが見つかりませんでした")
+
+                        # サンプル検索（blog_articlesインデックスがある場合）
+                        search_response = requests.get(f'{es_manager.url}/blog_articles/_search?size=5', timeout=5)
+                        if search_response.status_code == 200:
+                            search_data = search_response.json()
+                            hits = search_data.get('hits', {}).get('hits', [])
+
+                            if hits:
+                                st.write("**📝 サンプル記事データ:**")
+                                for i, hit in enumerate(hits, 1):
+                                    source = hit.get('_source', {})
+                                    with st.expander(f"記事 {i}: {source.get('title', 'タイトル不明')}"):
+                                        col1, col2 = st.columns([2, 1])
+                                        with col1:
+                                            st.write(f"**内容:** {source.get('content', 'N/A')}")
+                                            st.write(f"**カテゴリ:** {source.get('category', 'N/A')}")
+                                        with col2:
+                                            st.write(f"**著者:** {source.get('author', 'N/A')}")
+                                            st.write(f"**閲覧数:** {source.get('view_count', 'N/A')}")
+                                            st.write(f"**公開日:** {source.get('published_date', 'N/A')}")
+                            else:
+                                st.info("blog_articlesインデックスにデータが見つかりませんでした")
+                        else:
+                            st.warning("blog_articlesインデックスが存在しないか、アクセスできません")
+
+                    except Exception as e:
+                        st.error(f"Elasticsearch詳細データ取得エラー: {e}")
+            else:
+                st.warning("Elasticsearchサーバーに接続できません")
+                st.write(f"状態: {status['status']}")
+                st.write(f"詳細: {status['details']}")
 
     def _render_qdrant_details(self):
         """Qdrant詳細表示"""
         st.subheader("🟠 Qdrant データ")
         if st.button("Qdrant データを表示", key="show_qdrant"):
-            # 実装は元のコードと同様
-            pass
+            qdrant_manager = self.status_manager.get_manager('Qdrant')
+            status = qdrant_manager.check_connection()
+
+            if "🟢" in status["status"]:
+                with st.spinner("Qdrantデータを取得中..."):
+                    try:
+                        # コレクション一覧を取得
+                        response = requests.get(f'{qdrant_manager.url}/collections', timeout=5)
+                        if response.status_code == 200:
+                            collections_data = response.json()
+                            collections = collections_data.get('result', {}).get('collections', [])
+
+                            st.write("**📚 コレクション一覧:**")
+                            if collections:
+                                collection_info = []
+                                for collection in collections:
+                                    # 各コレクションの詳細を取得
+                                    detail_response = requests.get(
+                                        f'{qdrant_manager.url}/collections/{collection["name"]}',
+                                        timeout=5
+                                    )
+                                    if detail_response.status_code == 200:
+                                        detail_data = detail_response.json()
+                                        result = detail_data.get('result', {})
+                                        config = result.get('config', {})
+
+                                        collection_info.append({
+                                            '名前'        : collection['name'],
+                                            'ベクトル数'  : result.get('points_count', 0),
+                                            'ベクトル次元': config.get('params', {}).get('vectors', {}).get('size',
+                                                                                                            'N/A'),
+                                            '距離計算'    : config.get('params', {}).get('vectors', {}).get('distance',
+                                                                                                            'N/A'),
+                                            'ステータス'  : result.get('status', 'unknown')
+                                        })
+                                    else:
+                                        collection_info.append({
+                                            '名前'        : collection['name'],
+                                            'ベクトル数'  : 'N/A',
+                                            'ベクトル次元': 'N/A',
+                                            '距離計算'    : 'N/A',
+                                            'ステータス'  : 'unknown'
+                                        })
+
+                                df_collections = pd.DataFrame(collection_info)
+                                st.dataframe(df_collections, use_container_width=True)
+                            else:
+                                st.info("コレクションが見つかりませんでした")
+
+                        # サンプルデータ取得（最初のコレクションから）
+                        if collections:
+                            collection_name = collections[0]['name']
+
+                            # ポイントを取得
+                            points_response = requests.post(
+                                f'{qdrant_manager.url}/collections/{collection_name}/points/scroll',
+                                json={"limit": 5, "with_payload": True, "with_vector": False},
+                                headers={'Content-Type': 'application/json'},
+                                timeout=5
+                            )
+
+                            if points_response.status_code == 200:
+                                points_data = points_response.json()
+                                points = points_data.get('result', {}).get('points', [])
+
+                                if points:
+                                    st.write(f"**🔍 {collection_name} サンプルデータ:**")
+                                    sample_data = []
+                                    for point in points:
+                                        payload = point.get('payload', {})
+                                        sample_data.append({
+                                            'ID': point.get('id', 'N/A'),
+                                            **{k: str(v)[:50] + ('...' if len(str(v)) > 50 else '')
+                                               for k, v in payload.items()}
+                                        })
+
+                                    if sample_data:
+                                        df_samples = pd.DataFrame(sample_data)
+                                        st.dataframe(df_samples, use_container_width=True)
+
+                        # クラスター情報
+                        st.write("**🏥 クラスター情報:**")
+                        try:
+                            cluster_response = requests.get(f'{qdrant_manager.url}/cluster', timeout=5)
+
+                            if cluster_response.status_code == 200:
+                                cluster_data = cluster_response.json()
+                                result = cluster_data.get('result', {})
+
+                                # クラスター機能の状態をチェック
+                                cluster_status = result.get('status')
+
+                                if cluster_status == 'disabled':
+                                    # クラスター機能が無効の場合（単一ノード構成）
+                                    st.info("クラスター機能は無効です（単一ノード構成）")
+
+                                    # Telemetry情報から代替情報を取得
+                                    try:
+                                        telemetry_response = requests.get(f'{qdrant_manager.url}/telemetry', timeout=5)
+                                        if telemetry_response.status_code == 200:
+                                            telemetry_data = telemetry_response.json()
+                                            telemetry_result = telemetry_data.get('result', {})
+
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                st.write(f"**ノードID:** {telemetry_result.get('id', 'N/A')}")
+                                                collections_count = len(telemetry_result.get('collections', {}))
+                                                st.write(f"**コレクション数:** {collections_count}")
+                                            with col2:
+                                                app_info = telemetry_result.get('app', {})
+                                                st.write(f"**バージョン:** {app_info.get('version', 'N/A')}")
+                                                st.write(f"**構成モード:** スタンドアローン")
+
+                                    except Exception as telemetry_error:
+                                        st.warning(f"Telemetry情報の取得に失敗: {telemetry_error}")
+                                        st.write("**構成:** 単一ノード（詳細情報取得不可）")
+
+                                elif cluster_status == 'enabled' or 'peers' in result:
+                                    # クラスター機能が有効の場合（複数ノード構成）
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        peers = result.get('peers', [])
+                                        st.write(f"**ピア数:** {len(peers)}")
+                                        st.write(f"**ローカルピアID:** {result.get('peer_id', 'N/A')}")
+                                    with col2:
+                                        consensus_thread = result.get('consensus_thread_status', {})
+                                        st.write(f"**リーダー:** {consensus_thread.get('is_leader', False)}")
+                                        st.write(f"**クラスター状態:** {cluster_status or '有効'}")
+
+                                else:
+                                    # 不明な状態
+                                    st.warning(f"不明なクラスター状態: {cluster_status}")
+                                    st.write("**構成:** 不明")
+
+                                # デバッグ情報（展開可能）
+                                with st.expander("🔍 詳細なクラスター情報", expanded=False):
+                                    st.json(cluster_data)
+
+                            else:
+                                st.warning(f"クラスター情報の取得に失敗 (Status: {cluster_response.status_code})")
+
+                        except requests.exceptions.RequestException as e:
+                            st.warning(f"クラスター情報の取得でネットワークエラー: {e}")
+
+                    except Exception as e:
+                        st.error(f"Qdrant詳細データ取得エラー: {e}")
+            else:
+                st.warning("Qdrantサーバーに接続できません")
+                st.write(f"状態: {status['status']}")
+                st.write(f"詳細: {status['details']}")
 
 
 class AIChatPage(PageManager):
@@ -573,9 +841,29 @@ docker-compose -f docker-compose.mcp-demo.yml up -d redis-mcp postgres-mcp es-mc
 
     def _check_api_key(self) -> bool:
         """API キーチェック"""
-        import os
-        if not os.getenv('OPENAI_API_KEY'):
-            st.error("🔑 OPENAI_API_KEY が設定されていません。.envファイルを確認してください。")
+        api_key = safe_get_secret('OPENAI_API_KEY', os.getenv('OPENAI_API_KEY'))
+        if not api_key:
+            st.error("🔑 OPENAI_API_KEY が設定されていません。.envファイルまたはsecrets.tomlを確認してください。")
+
+            # 設定方法を表示
+            with st.expander("🔧 設定方法", expanded=True):
+                st.markdown("""
+                **方法1: 環境変数（推奨）**
+                ```bash
+                export OPENAI_API_KEY="sk-..."
+                ```
+
+                **方法2: .envファイル**
+                ```
+                OPENAI_API_KEY=sk-...
+                ```
+
+                **方法3: secrets.tomlファイル**
+                ```toml
+                # .streamlit/secrets.toml
+                OPENAI_API_KEY = "sk-..."
+                ```
+                """)
             return False
         return True
 
@@ -680,6 +968,101 @@ docker-compose -f docker-compose.mcp-demo.yml up -d redis-mcp postgres-mcp es-mc
         """
 
 
+class DataAnalysisPage(PageManager):
+    """データ分析ダッシュボードページ"""
+
+    def render(self):
+        st.header("📈 データ分析とダッシュボード")
+
+        # 必要なサーバーの確認
+        status = self.status_manager.check_all_servers()
+        required_servers = ['PostgreSQL', 'Redis']
+        servers_ready = all("🟢" in status[server]["status"] for server in required_servers)
+
+        if not servers_ready:
+            st.warning("データ分析には PostgreSQL と Redis の接続が必要です")
+            return
+
+        try:
+            self._render_sales_analysis()
+            self._render_redis_statistics()
+        except Exception as e:
+            st.error(f"データ分析エラー: {e}")
+
+    def _render_sales_analysis(self):
+        """売上分析"""
+        st.subheader("💰 売上分析")
+
+        engine = sqlalchemy.create_engine(os.getenv('PG_CONN_STR'))
+
+        col1, col2, col3 = st.columns(3)
+
+        # 総売上
+        total_sales = pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", engine).iloc[0]['total']
+        with col1:
+            safe_format_metric("総売上", total_sales, prefix="¥")
+
+        # 平均注文価格
+        avg_order = pd.read_sql("SELECT AVG(price * quantity) as avg FROM orders", engine).iloc[0]['avg']
+        with col2:
+            safe_format_metric("平均注文価格", avg_order, prefix="¥")
+
+        # 注文数
+        order_count = pd.read_sql("SELECT COUNT(*) as count FROM orders", engine).iloc[0]['count']
+        with col3:
+            safe_format_metric("総注文数", order_count, suffix="件", use_comma=False)
+
+        engine.dispose()
+
+    def _render_redis_statistics(self):
+        """Redis統計"""
+        st.subheader("🔴 Redis 統計")
+
+        try:
+            r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                active_sessions = len(r.keys('session:*'))
+                safe_format_metric("アクティブセッション", active_sessions, use_comma=False)
+
+            with col2:
+                page_views = r.get('counter:page_views') or 0
+                safe_format_metric("ページビュー", page_views)
+
+            with col3:
+                search_count = r.llen('search:recent')
+                safe_format_metric("検索履歴数", search_count, use_comma=False)
+
+            # Redis詳細統計
+            st.write("**Redis詳細統計**")
+
+            # メモリ使用量（info commandの結果をパース）
+            redis_info = r.info()
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                used_memory = redis_info.get('used_memory_human', 'N/A')
+                st.metric("使用メモリ", used_memory)
+
+            with col2:
+                connected_clients = redis_info.get('connected_clients', 0)
+                safe_format_metric("接続クライアント数", connected_clients, use_comma=False)
+
+            with col3:
+                total_commands = redis_info.get('total_commands_processed', 0)
+                safe_format_metric("総コマンド数", total_commands)
+
+            with col4:
+                uptime_days = redis_info.get('uptime_in_days', 0)
+                safe_format_metric("稼働日数", uptime_days, "日", use_comma=False)
+
+        except Exception as e:
+            st.error(f"Redis統計取得エラー: {e}")
+
+
 # ==================================================
 # メインアプリケーション管理
 # ==================================================
@@ -696,20 +1079,32 @@ class MCPApplication:
 
     def _initialize_pages(self):
         """ページの初期化"""
-        from helper_mcp_pages import DirectQueryPage, DataAnalysisPage, SettingsPage
-
-        return {
-            0: DataViewPage("データ確認", self.status_manager),
-            1: AIChatPage("AIチャット", self.status_manager),
-            2: DirectQueryPage("直接クエリ", self.status_manager),
-            3: DataAnalysisPage("データ分析", self.status_manager),
-            4: SettingsPage("設定", self.status_manager),
-        }
+        try:
+            from helper_mcp_pages import DirectQueryPage, SettingsPage
+            return {
+                0: DataViewPage("データ確認", self.status_manager),
+                1: AIChatPage("AIチャット", self.status_manager),
+                2: DirectQueryPage("直接クエリ", self.status_manager),
+                3: DataAnalysisPage("データ分析", self.status_manager),
+                4: SettingsPage("設定", self.status_manager),
+            }
+        except ImportError:
+            # helper_mcp_pages.py が存在しない場合の簡易版
+            return {
+                0: DataViewPage("データ確認", self.status_manager),
+                1: AIChatPage("AIチャット", self.status_manager),
+                2: None,  # 簡易版では未実装
+                3: DataAnalysisPage("データ分析", self.status_manager),
+                4: None,  # 簡易版では未実装
+            }
 
     def run(self):
         """アプリケーションの実行"""
         # セッション初期化
         MCPSessionManager.init_session()
+
+        # 環境変数の確認と警告表示
+        self._check_environment()
 
         # サイドバー描画
         self.sidebar_manager.render_server_status()
@@ -720,10 +1115,60 @@ class MCPApplication:
         st.markdown(f"### 現在のページ: {self.tab_names[current_tab]}")
 
         # ページコンテンツの描画
-        if current_tab in self.pages:
+        if current_tab in self.pages and self.pages[current_tab] is not None:
             self.pages[current_tab].render()
         else:
             st.warning(f"ページ {current_tab} は実装中です")
+            self._render_setup_instructions()
+
+    def _check_environment(self):
+        """環境設定のチェックと警告表示"""
+        missing_vars = []
+
+        # 必要な環境変数をチェック
+        required_vars = {
+            'OPENAI_API_KEY': 'OpenAI APIキー',
+            'PG_CONN_STR'   : 'PostgreSQL接続文字列'
+        }
+
+        for var, description in required_vars.items():
+            if not safe_get_secret(var, os.getenv(var)):
+                missing_vars.append(f"**{var}**: {description}")
+
+        if missing_vars:
+            with st.sidebar.expander("⚠️ 設定不備", expanded=True):
+                st.warning("以下の設定が不足しています:")
+                for var in missing_vars:
+                    st.write(f"- {var}")
+
+                st.info("設定方法は「⚙️ 設定」タブを参照してください")
+
+    def _render_setup_instructions(self):
+        """セットアップ手順の表示"""
+        st.markdown("""
+        ## 🚀 セットアップ手順
+
+        ### 1. 環境変数の設定
+        以下の環境変数を設定してください：
+
+        ```bash
+        # OpenAI API キー（必須）
+        export OPENAI_API_KEY="sk-..."
+
+        # PostgreSQL接続文字列（オプション）
+        export PG_CONN_STR="postgresql://user:pass@localhost:5432/dbname"
+        ```
+
+        ### 2. Dockerサービス起動（オプション）
+        ```bash
+        docker-compose -f docker-compose.mcp-demo.yml up -d
+        ```
+
+        ### 3. テストデータ投入（オプション）
+        ```bash
+        uv run python scripts/setup_test_data.py
+        ```
+        """)
 
 
 # ==================================================
@@ -740,4 +1185,8 @@ __all__ = [
     'SidebarManager',
     'DataViewPage',
     'AIChatPage',
+    'DataAnalysisPage',
+    'safe_get_secret',
+    'safe_format_number',
+    'safe_format_metric',
 ]
