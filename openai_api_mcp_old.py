@@ -1,4 +1,4 @@
-# streamlit run a_mcp_sample.py --server.port=8501
+# streamlit run openai_api_mcp_old.py --server.port=8501
 import streamlit as st
 import openai
 import os
@@ -56,6 +56,14 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# セッション状態の初期化
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'selected_tab_index' not in st.session_state:
+    st.session_state.selected_tab_index = 0
+if 'auto_process_question' not in st.session_state:
+    st.session_state.auto_process_question = False
 
 # サイドバーでMCPサーバーの状態確認
 st.sidebar.header("📊 MCP サーバー状態")
@@ -148,19 +156,26 @@ if st.sidebar.button("🚀 Docker起動"):
 if st.sidebar.button("📊 データ再投入"):
     st.sidebar.code("uv run python scripts/setup_test_data.py")
 
-# メインコンテンツ
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔍 データ確認",
-    "🤖 AI チャット",
-    "📊 直接クエリ",
-    "📈 データ分析",
-    "⚙️ 設定"
-])
+# タブ管理のための新しいアプローチ
+tab_names = ["🔍 データ確認", "🤖 AI チャット", "📊 直接クエリ", "📈 データ分析", "⚙️ 設定"]
 
-# ---------------------------------
-# tab1 = データ確認
-# ---------------------------------
-with tab1:
+# タブ選択ボタンをサイドバーに配置
+st.sidebar.markdown("---")
+st.sidebar.header("📋 ページ選択")
+
+for i, tab_name in enumerate(tab_names):
+    if st.sidebar.button(tab_name, key=f"tab_btn_{i}"):
+        st.session_state.selected_tab_index = i
+
+# 現在のタブを表示
+current_tab = tab_names[st.session_state.selected_tab_index]
+st.markdown(f"### 現在のページ: {current_tab}")
+
+# メインコンテンツを条件分岐で表示
+if st.session_state.selected_tab_index == 0:
+    # ---------------------------------
+    # データ確認
+    # ---------------------------------
     st.write("📊 投入されたテストデータの確認")
 
     # データ概要カード
@@ -317,7 +332,8 @@ with tab1:
 
                         with stats_col3:
                             total_sales = \
-                            pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", engine).iloc[0]['total']
+                                pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", engine).iloc[0][
+                                    'total']
                             st.metric("総売上", f"¥{total_sales:,.0f}")
 
                     # エンジンを閉じる
@@ -451,10 +467,10 @@ with tab1:
         else:
             st.warning("Qdrant サーバーに接続できません")
 
-# ---------------------------------
-# tab2 = AI アシスタント
-# ---------------------------------
-with tab2:
+elif st.session_state.selected_tab_index == 1:
+    # ---------------------------------
+    # AI アシスタント
+    # ---------------------------------
     st.header("🤖 AI アシスタント（MCP経由）")
 
     # MCP サーバー状態の確認
@@ -476,10 +492,6 @@ docker-compose -f docker-compose.mcp-demo.yml ps
         st.error("🔑 OPENAI_API_KEY が設定されていません。.envファイルを確認してください。")
         st.stop()
 
-    # チャット履歴の初期化
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
     # サンプル質問
     st.subheader("💡 サンプル質問")
     sample_questions = [
@@ -491,10 +503,15 @@ docker-compose -f docker-compose.mcp-demo.yml ps
     ]
 
     selected_question = st.selectbox("質問を選択（または下のチャットに直接入力）:",
-                                     ["選択してください..."] + sample_questions)
+                                     ["選択してください..."] + sample_questions,
+                                     key="question_selector")
 
-    if selected_question != "選択してください..." and st.button("この質問を使用"):
+    # 修正された部分：タブの状態を保持
+    if selected_question != "選択してください..." and st.button("この質問を使用", key="use_question_btn"):
         st.session_state.messages.append({"role": "user", "content": selected_question})
+        st.session_state.auto_process_question = True
+        # タブの状態を維持（AIチャットタブのまま）
+        st.session_state.selected_tab_index = 1
         st.rerun()
 
     # チャット履歴表示
@@ -503,26 +520,40 @@ docker-compose -f docker-compose.mcp-demo.yml ps
             st.write(message["content"])
 
     # チャット入力
-    if prompt := st.chat_input("何か質問してください"):
-        # ユーザーメッセージを追加
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.write(prompt)
+    prompt = st.chat_input("何か質問してください")
 
-        # AI応答
-        with st.chat_message("assistant"):
-            response_placeholder = st.empty()
+    # 自動処理フラグのチェック、または新しいプロンプトの処理
+    if st.session_state.auto_process_question or prompt:
+        if st.session_state.auto_process_question:
+            # フラグをリセット
+            st.session_state.auto_process_question = False
+            # 最後のメッセージを処理
+            if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+                current_prompt = st.session_state.messages[-1]["content"]
+            else:
+                current_prompt = None
+        else:
+            # 新しいプロンプトの場合
+            current_prompt = prompt
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.write(prompt)
 
-            try:
-                with st.spinner("AI が回答を生成中..."):
-                    # 実際のOpenAI API呼び出し（MCPサーバーなしの場合のフォールバック）
-                    if mcp_servers_ready:
-                        # 実際のMCP呼び出しはここに実装
-                        # 現在はダミーレスポンスを返す
-                        response_text = f"""
+        if current_prompt:
+            # AI応答
+            with st.chat_message("assistant"):
+                response_placeholder = st.empty()
+
+                try:
+                    with st.spinner("AI が回答を生成中..."):
+                        # 実際のOpenAI API呼び出し（MCPサーバーなしの場合のフォールバック）
+                        if mcp_servers_ready:
+                            # 実際のMCP呼び出しはここに実装
+                            # 現在はダミーレスポンスを返す
+                            response_text = f"""
 🤖 **AI Assistant Response**
 
-質問: "{prompt}"
+質問: "{current_prompt}"
 
 申し訳ございませんが、現在MCPサーバーとの連携機能は開発中です。
 代わりに、利用可能なデータについて説明いたします：
@@ -541,9 +572,9 @@ docker-compose -f docker-compose.mcp-demo.yml ps
 **💡 現在できること:**
 - "📊 直接クエリ" タブで各データベースに直接アクセス
 - "🔍 データ確認" タブでテストデータの確認
-                        """
-                    else:
-                        response_text = f"""
+                            """
+                        else:
+                            response_text = f"""
 ⚠️ **データベース接続エラー**
 
 申し訳ございませんが、一部のデータベースサーバーに接続できません。
@@ -568,32 +599,32 @@ docker-compose -f docker-compose.mcp-demo.yml ps
    ```
 
 サーバーが起動したら、再度お試しください。
-                        """
+                            """
 
-                    # レスポンスをタイプライター風に表示
-                    full_response = ""
-                    for word in response_text.split():
-                        full_response += word + " "
-                        response_placeholder.markdown(full_response + "▌")
-                        time.sleep(0.05)  # タイプライター効果
+                        # レスポンスをタイプライター風に表示
+                        full_response = ""
+                        for word in response_text.split():
+                            full_response += word + " "
+                            response_placeholder.markdown(full_response + "▌")
+                            time.sleep(0.05)  # タイプライター効果
 
-                    response_placeholder.markdown(response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                        response_placeholder.markdown(response_text)
+                        st.session_state.messages.append({"role": "assistant", "content": response_text})
 
-            except Exception as e:
-                error_msg = f"❌ エラーが発生しました: {e}"
-                response_placeholder.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                except Exception as e:
+                    error_msg = f"❌ エラーが発生しました: {e}"
+                    response_placeholder.error(error_msg)
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
     # チャット履歴のクリア
-    if st.button("🗑️ チャット履歴をクリア"):
+    if st.button("🗑️ チャット履歴をクリア", key="clear_chat"):
         st.session_state.messages = []
         st.rerun()
 
-# ------------------------------------------
-# tab3 = 直接データベースクエリ
-# ------------------------------------------
-with tab3:
+elif st.session_state.selected_tab_index == 2:
+    # ------------------------------------------
+    # 直接データベースクエリ
+    # ------------------------------------------
     st.header("📊 直接データベースクエリ")
 
     query_type = st.selectbox("クエリタイプを選択",
@@ -911,10 +942,11 @@ with tab3:
                     st.error(f"エラー: {e}")
             else:
                 st.warning("Qdrant サーバーに接続できません")
-# ------------------------
-# tab4 = データ分析とダッシュボード
-# ------------------------
-with tab4:
+
+elif st.session_state.selected_tab_index == 3:
+    # ------------------------
+    # データ分析とダッシュボード
+    # ------------------------
     st.header("📈 データ分析とダッシュボード")
 
     if all("🟢" in status.get(server, '') for server in ['PostgreSQL', 'Redis']):
@@ -1012,7 +1044,8 @@ with tab4:
     else:
         st.warning("データ分析には PostgreSQL と Redis の接続が必要です")
 
-with tab5:
+elif st.session_state.selected_tab_index == 4:
+    # 設定タブ
     st.header("⚙️ 設定とヘルプ")
 
     # システム情報
@@ -1149,4 +1182,4 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# streamlit run a_mcp_sample.py --server.port=8501
+# streamlit run openai_api_mcp_old.py --server.port=8501

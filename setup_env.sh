@@ -121,7 +121,7 @@ if [ -f "a_mcp_sample.py" ]; then
 
     # 8. アプリ起動テスト
     echo "🧪 アプリの構文チェック中..."
-    if python -m py_compile a_mcp_sample.py; then
+    if python -m py_compile openai_api_mcp_sample.py; then
         echo "✅ 構文チェック完了"
     else
         echo "❌ 構文エラーがあります"
