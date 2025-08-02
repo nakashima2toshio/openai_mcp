@@ -5,9 +5,9 @@ import os
 import json
 import pandas as pd
 from dotenv import load_dotenv
-# import redis
-from redis import client as redis_client   # 同期クライアントを明示
+import redis
 import psycopg2
+import sqlalchemy  # ←追加：SQLAlchemy インポート
 import requests
 from datetime import datetime
 import time
@@ -97,7 +97,7 @@ def check_server_status():
 
     # Qdrant
     try:
-        response = requests.get('http://localhost:6333/health', timeout=3)
+        response = requests.get('http://localhost:6333/', timeout=3)
         if response.status_code == 200:
             status['Qdrant'] = "🟢 接続OK"
         else:
@@ -106,6 +106,24 @@ def check_server_status():
         status['Qdrant'] = f"🔴 接続NG ({str(e)[:20]}...)"
 
     return status
+
+
+# Redis キー数取得関数（修正版）
+@st.cache_data(ttl=60)  # 1分キャッシュ
+def get_redis_key_count():
+    """Redisキー数を安全に取得"""
+    try:
+        r = redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=3)
+        r.ping()
+        # scan_iterを使用してメモリ効率良くキー数を取得
+        count = 0
+        for _ in r.scan_iter():
+            count += 1
+            if count > 1000:  # 安全のため1000で制限
+                return f"{count}+"
+        return str(count)
+    except Exception:
+        return "?"
 
 
 # サーバー状態表示
@@ -146,9 +164,11 @@ with tab1:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+        # Redis キー数を修正版で取得
+        redis_key_count = get_redis_key_count() if "🟢" in status.get('Redis', '') else "?"
         st.metric(
             label="Redis Keys",
-            value="?" if "🔴" in status.get('Redis', '') else "計算中...",
+            value=redis_key_count,
             help="Redisに保存されているキーの総数"
         )
 
@@ -183,15 +203,11 @@ with tab1:
         if st.button("Redis データを表示", key="show_redis"):
             if "🟢" in status.get('Redis', ''):
                 try:
-                    # r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-                    r: redis_client.Redis = redis_client.Redis(
-                        host='localhost', port=6379, db=0, decode_responses=True
-                    )
+                    r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
                     with st.spinner("Redisデータを取得中..."):
                         # セッションデータ
                         st.write("**🔑 セッションデータ:**")
-                        # session_keys = r.keys('session:*')
-                        session_keys: list[str] = list(r.scan_iter('session:*'))
+                        session_keys = list(r.scan_iter('session:*'))
                         if session_keys:
                             session_data = []
                             for key in sorted(session_keys):
@@ -206,8 +222,7 @@ with tab1:
 
                         # カウンタデータ
                         st.write("**📊 カウンタデータ:**")
-                        # counter_keys = r.keys('counter:*')
-                        counter_keys: list[str] = list(r.scan_iter('counter:*'))
+                        counter_keys = list(r.scan_iter('counter:*'))
                         if counter_keys:
                             counter_data = {}
                             for key in sorted(counter_keys):
@@ -240,8 +255,7 @@ with tab1:
 
                         # ユーザープロファイル
                         st.write("**👤 ユーザープロファイル:**")
-                        # profile_keys = r.keys('profile:*')
-                        profile_keys: list[str] = list(r.scan_iter('profile:*'))
+                        profile_keys = list(r.scan_iter('profile:*'))
                         if profile_keys:
                             for key in sorted(profile_keys):
                                 profile_data = json.loads(r.get(key))
@@ -260,12 +274,13 @@ with tab1:
         if st.button("PostgreSQL データを表示", key="show_postgres"):
             if "🟢" in status.get('PostgreSQL', ''):
                 try:
-                    conn = psycopg2.connect(os.getenv('PG_CONN_STR'))
+                    # SQLAlchemy エンジンを作成
+                    engine = sqlalchemy.create_engine(os.getenv('PG_CONN_STR'))
 
                     with st.spinner("PostgreSQLデータを取得中..."):
                         # 顧客データ
                         st.write("**👥 顧客データ:**")
-                        df_customers = pd.read_sql("SELECT * FROM customers ORDER BY id LIMIT 10", conn)
+                        df_customers = pd.read_sql("SELECT * FROM customers ORDER BY id LIMIT 10", engine)
                         st.dataframe(df_customers, use_container_width=True)
 
                         # 注文データ
@@ -276,12 +291,12 @@ with tab1:
                                                          JOIN customers c ON o.customer_id = c.id
                                                 ORDER BY o.order_date DESC
                                                 LIMIT 10
-                                                """, conn)
+                                                """, engine)
                         st.dataframe(df_orders, use_container_width=True)
 
                         # 商品データ
                         st.write("**📦 商品データ:**")
-                        df_products = pd.read_sql("SELECT * FROM products ORDER BY id", conn)
+                        df_products = pd.read_sql("SELECT * FROM products ORDER BY id", engine)
                         st.dataframe(df_products, use_container_width=True)
 
                         # 統計情報
@@ -289,20 +304,21 @@ with tab1:
                         stats_col1, stats_col2, stats_col3 = st.columns(3)
 
                         with stats_col1:
-                            customer_count = pd.read_sql("SELECT COUNT(*) as count FROM customers", conn).iloc[0][
+                            customer_count = pd.read_sql("SELECT COUNT(*) as count FROM customers", engine).iloc[0][
                                 'count']
                             st.metric("総顧客数", customer_count)
 
                         with stats_col2:
-                            order_count = pd.read_sql("SELECT COUNT(*) as count FROM orders", conn).iloc[0]['count']
+                            order_count = pd.read_sql("SELECT COUNT(*) as count FROM orders", engine).iloc[0]['count']
                             st.metric("総注文数", order_count)
 
                         with stats_col3:
                             total_sales = \
-                            pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", conn).iloc[0]['total']
+                            pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", engine).iloc[0]['total']
                             st.metric("総売上", f"¥{total_sales:,.0f}")
 
-                    conn.close()
+                    # エンジンを閉じる
+                    engine.dispose()
 
                 except Exception as e:
                     st.error(f"PostgreSQL接続エラー: {e}")
@@ -360,31 +376,61 @@ with tab1:
         if "🟢" in status.get('Qdrant', ''):
             try:
                 with st.spinner("Qdrantデータを取得中..."):
-                    response = requests.get('http://localhost:6333/collections/product_embeddings/points?limit=10')
-                    if response.status_code == 200:
-                        data = response.json()
-                        if 'result' in data and 'points' in data['result']:
-                            products = []
-                            for point in data['result']['points']:
-                                product = point['payload'].copy()
-                                product['id'] = point['id']
-                                product['vector_size'] = len(point['vector']) if 'vector' in point else 0
-                                products.append(product)
+                    # まずコレクション一覧を取得
+                    collections_response = requests.get('http://localhost:6333/collections', timeout=5)
 
-                            if products:
-                                df_products = pd.DataFrame(products)
-                                st.dataframe(df_products, use_container_width=True)
+                    if collections_response.status_code == 200:
+                        collections_data = collections_response.json()
+                        st.write("**📋 利用可能なコレクション:**")
+                        st.json(collections_data)
 
-                                # 商品カテゴリ分布
-                                st.write("**📊 カテゴリ分布:**")
-                                category_counts = df_products['category'].value_counts()
-                                st.bar_chart(category_counts)
+                        collections = collections_data.get('result', {}).get('collections', [])
+                        collection_names = [col['name'] for col in collections]
+
+                        if 'product_embeddings' in collection_names:
+                            # コレクションが存在する場合のみデータ取得
+                            points_response = requests.get(
+                                'http://localhost:6333/collections/product_embeddings/points?limit=10')
+
+                            if points_response.status_code == 200:
+                                data = points_response.json()
+                                if 'result' in data and 'points' in data['result']:
+                                    products = []
+                                    for point in data['result']['points']:
+                                        product = point['payload'].copy()
+                                        product['id'] = point['id']
+                                        product['vector_size'] = len(point['vector']) if 'vector' in point else 0
+                                        products.append(product)
+
+                                    if products:
+                                        df_products = pd.DataFrame(products)
+                                        st.dataframe(df_products, use_container_width=True)
+
+                                        # 商品カテゴリ分布
+                                        st.write("**📊 カテゴリ分布:**")
+                                        if 'category' in df_products.columns:
+                                            category_counts = df_products['category'].value_counts()
+                                            st.bar_chart(category_counts)
+                                        else:
+                                            st.info("カテゴリ情報がありません")
+                                    else:
+                                        st.info("商品ベクトルが見つかりません")
+                                else:
+                                    st.error("Qdrant データの形式が予期しないものです")
                             else:
-                                st.info("商品ベクトルが見つかりません")
+                                st.error(f"商品データの取得に失敗しました (Status: {points_response.status_code})")
                         else:
-                            st.error("Qdrant データの形式が予期しないものです")
+                            st.warning("product_embeddingsコレクションが見つかりません")
+                            st.info("利用可能なコレクション: " + ", ".join(
+                                collection_names) if collection_names else "なし")
+
+                            # データセットアップの提案
+                            st.info("💡 解決方法: データセットアップスクリプトを実行してください")
+                            st.code("uv run python scripts/setup_test_data.py")
                     else:
-                        st.error(f"Qdrant データの取得に失敗しました (Status: {response.status_code})")
+                        st.error(
+                            f"Qdrant コレクション一覧の取得に失敗しました (Status: {collections_response.status_code})")
+
             except Exception as e:
                 st.error(f"Qdrant接続エラー: {e}")
                 st.code(traceback.format_exc())
@@ -647,8 +693,9 @@ with tab3:
                     if not sql_query.strip().upper().startswith('SELECT'):
                         st.error("安全性のため、SELECTクエリのみ実行できます")
                     else:
-                        conn = psycopg2.connect(os.getenv('PG_CONN_STR'))
-                        df = pd.read_sql(sql_query, conn)
+                        # SQLAlchemy エンジンを使用
+                        engine = sqlalchemy.create_engine(os.getenv('PG_CONN_STR'))
+                        df = pd.read_sql(sql_query, engine)
 
                         if len(df) > 0:
                             st.dataframe(df, use_container_width=True)
@@ -664,7 +711,7 @@ with tab3:
                         else:
                             st.info("クエリの結果は空でした")
 
-                        conn.close()
+                        engine.dispose()
 
                 except Exception as e:
                     st.error(f"エラー: {e}")
@@ -850,8 +897,8 @@ with tab4:
 
     if all("🟢" in status.get(server, '') for server in ['PostgreSQL', 'Redis']):
         try:
-            # PostgreSQLからデータを取得
-            conn = psycopg2.connect(os.getenv('PG_CONN_STR'))
+            # SQLAlchemy エンジンを作成
+            engine = sqlalchemy.create_engine(os.getenv('PG_CONN_STR'))
 
             # 売上分析
             st.subheader("💰 売上分析")
@@ -859,17 +906,17 @@ with tab4:
             col1, col2, col3 = st.columns(3)
 
             # 総売上
-            total_sales = pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", conn).iloc[0]['total']
+            total_sales = pd.read_sql("SELECT SUM(price * quantity) as total FROM orders", engine).iloc[0]['total']
             with col1:
                 st.metric("総売上", f"¥{total_sales:,.0f}")
 
             # 平均注文価格
-            avg_order = pd.read_sql("SELECT AVG(price * quantity) as avg FROM orders", conn).iloc[0]['avg']
+            avg_order = pd.read_sql("SELECT AVG(price * quantity) as avg FROM orders", engine).iloc[0]['avg']
             with col2:
                 st.metric("平均注文価格", f"¥{avg_order:,.0f}")
 
             # 注文数
-            order_count = pd.read_sql("SELECT COUNT(*) as count FROM orders", conn).iloc[0]['count']
+            order_count = pd.read_sql("SELECT COUNT(*) as count FROM orders", engine).iloc[0]['count']
             with col3:
                 st.metric("総注文数", f"{order_count:,}")
 
@@ -882,7 +929,7 @@ with tab4:
                                         FROM orders
                                         GROUP BY product_name
                                         ORDER BY total_sales DESC
-                                        """, conn)
+                                        """, engine)
 
             col1, col2 = st.columns(2)
 
@@ -904,7 +951,7 @@ with tab4:
                                                   LEFT JOIN orders o ON c.id = o.customer_id
                                          GROUP BY c.city
                                          ORDER BY total_spent DESC
-                                         """, conn)
+                                         """, engine)
 
             col1, col2 = st.columns(2)
 
@@ -935,7 +982,8 @@ with tab4:
                 search_count = r.llen('search:recent')
                 st.metric("検索履歴数", search_count)
 
-            conn.close()
+            # エンジンを閉じる
+            engine.dispose()
 
         except Exception as e:
             st.error(f"データ分析エラー: {e}")
@@ -1050,7 +1098,7 @@ uv run python scripts/setup_test_data.py
 
         **🟠 Qdrant 接続エラー**
         - コンテナの起動状況: `docker-compose ps qdrant`
-        - ヘルスチェック: `curl http://localhost:6333/health`
+        - ヘルスチェック: `curl http://localhost:6333/`
 
         **🤖 OpenAI API エラー**
         - APIキーの設定確認: `.env`ファイル

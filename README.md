@@ -1,7 +1,7 @@
 # 自然言語で各種サーバを利用する＝MCPサーバー
 ## OpenAI Responses API × MCP（Model Context Protocol）
 **Python / Docker / Docker Compose 前提での導入手順と連携例（改良版）**
-
+- pip install -r requirements.txt
 > **重要:** OpenAI **Responses API** から MCP を使うには、`server_url` で到達できる **Remote MCP（HTTP / SSE）** としてサーバを公開する必要があります。`stdio` 専用の MCP はそのままでは使えません（`stdio → HTTP/SSE` ブリッジが必要）。以下は学習・検証向けの雛形です。実際のオプション・起動方法は各リポジトリの README の最新版に従ってください。
 ---
 ### 🚀 使用方法
