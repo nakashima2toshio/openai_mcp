@@ -1,11 +1,21 @@
 # 自然言語で各種サーバを利用する＝MCPサーバー
+![start_img.png](assets/start_img.png)
+
+
 ## OpenAI Responses API × MCP（Model Context Protocol）
+
 **Python / Docker / Docker Compose 前提での導入手順と連携例（改良版）**
+
 - pip install -r requirements.txt
+
 > **重要:** OpenAI **Responses API** から MCP を使うには、`server_url` で到達できる **Remote MCP（HTTP / SSE）** としてサーバを公開する必要があります。`stdio` 専用の MCP はそのままでは使えません（`stdio → HTTP/SSE` ブリッジが必要）。以下は学習・検証向けの雛形です。実際のオプション・起動方法は各リポジトリの README の最新版に従ってください。
+
 ---
+
 ### 🚀 使用方法
+
 #### 個別サービスの起動
+
 ```bash
 # Redis MCP サーバーのみ起動
 docker-compose -f docker-compose.redis.yml up -d
@@ -15,6 +25,7 @@ docker-compose -f docker-compose.postgres.yml up -d
 ```
 
 #### PostgreSQL MCP サーバーのみ起動
+
 ```bash
 docker-compose -f docker-compose.postgres.yml up -d
 統合環境の起動
@@ -24,9 +35,11 @@ docker-compose -f docker-compose.all-mcp.yml up -d
 # 特定サービスのみ起動
 docker-compose -f docker-compose.all-mcp.yml up -d redis redis-mcp
 ```
+
 ---
 
 ## 目次
+
 - [共通の考え方](#共通の考え方)
 - [Docker Composeを使う利点](#docker-composeを使う利点)
 - [1) データベース系](#1-データベース系)
@@ -54,6 +67,7 @@ docker-compose -f docker-compose.all-mcp.yml up -d redis redis-mcp
 ---
 
 ## 共通の考え方
+
 - **Remote MCP（HTTP / SSE）を用意**し、**公開 URL** を `server_url` に設定します。
 - 認証が必要な MCP は、**ヘッダ**（例: `Authorization`）を Responses API の `headers` で付与できます。
 - **`allowed_tools`** で使用ツールを絞ると安全・安定（最小権限）。
@@ -72,10 +86,12 @@ docker-compose -f docker-compose.all-mcp.yml up -d redis redis-mcp
 ## 1) データベース系
 
 ### Redis MCP Server
+
 - **URL**: https://github.com/redis/mcp-redis
 - **概要**: Redis キー／集合／ストリーム／ベクターなどを操作。
 
 **Python（uvx）起動例**
+
 ```bash
 pip install uv
 uvx --from git+https://github.com/redis/mcp-redis.git \
@@ -83,6 +99,7 @@ uvx --from git+https://github.com/redis/mcp-redis.git \
 ```
 
 **Docker単体起動例**
+
 ```bash
 git clone https://github.com/redis/mcp-redis.git
 cd mcp-redis
@@ -94,6 +111,7 @@ docker run --rm -p 8000:8000 \
 ```
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.redis.yml
 version: '3.8'
@@ -134,6 +152,7 @@ networks:
 ```
 
 **起動方法**
+
 ```bash
 # Redis + Redis MCP サーバーを起動
 docker-compose -f docker-compose.redis.yml up -d
@@ -146,6 +165,7 @@ docker-compose -f docker-compose.redis.yml down
 ```
 
 **Responses API（Python）**
+
 ```python
 from openai import OpenAI
 client = OpenAI()
@@ -165,16 +185,19 @@ print(resp.output_text)
 ```
 
 ### PostgreSQL MCP Server
+
 - **URL**: https://github.com/HenkDz/postgresql-mcp-server
 - **概要**: PostgreSQL のスキーマ参照、CRUD、パフォーマンス分析など。
 
 **Node / npx単体起動**
+
 ```bash
 npx @henkey/postgres-mcp-server \
     --connection-string "postgresql://user:pass@localhost:5432/db"
 ```
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.postgres.yml
 version: '3.8'
@@ -215,6 +238,7 @@ volumes:
 ```
 
 **起動方法**
+
 ```bash
 # PostgreSQL + PostgreSQL MCP サーバーを起動
 docker-compose -f docker-compose.postgres.yml up -d
@@ -224,6 +248,7 @@ docker-compose -f docker-compose.postgres.yml exec postgres psql -U testuser -d 
 ```
 
 **Responses API（Python）**
+
 ```python
 tools=[{
   "type": "mcp",
@@ -235,10 +260,12 @@ tools=[{
 ```
 
 ### Elasticsearch MCP Server
+
 - **URL**: https://github.com/elastic/mcp-server-elasticsearch
 - **概要**: Elasticsearch インデックスの検索・操作（実験的）。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.elasticsearch.yml
 version: '3.8'
@@ -280,6 +307,7 @@ volumes:
 ```
 
 **起動方法**
+
 ```bash
 docker-compose -f docker-compose.elasticsearch.yml up -d
 
@@ -288,10 +316,12 @@ curl http://localhost:9200/_cluster/health
 ```
 
 ### Qdrant MCP Server
+
 - **URL**: https://github.com/qdrant/mcp-server-qdrant
 - **概要**: Qdrant をメモリ／検索レイヤーとして活用。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.qdrant.yml
 version: '3.8'
@@ -329,10 +359,12 @@ volumes:
 ```
 
 ### Pinecone MCP Server
+
 - **URL**: https://github.com/pinecone-io/pinecone-mcp
 - **概要**: Pinecone のインデックス操作・検索など（Node 実装）。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.pinecone.yml
 version: '3.8'
@@ -354,12 +386,14 @@ services:
 ```
 
 **環境変数ファイル（.env）**
+
 ```bash
 # .env
 PINECONE_API_KEY=your-pinecone-api-key-here
 ```
 
 **起動方法**
+
 ```bash
 # .envファイルを作成してAPIキーを設定
 echo "PINECONE_API_KEY=your-actual-api-key" > .env
@@ -370,10 +404,12 @@ docker-compose -f docker-compose.pinecone.yml --env-file .env up -d
 ## 2) ファイル／ドキュメント
 
 ### Filesystem MCP Server
+
 - **URL**: npm パッケージ @modelcontextprotocol/server-filesystem
 - **概要**: 指定ディレクトリのファイル読み書き・検索など。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.filesystem.yml
 version: '3.8'
@@ -401,6 +437,7 @@ volumes:
 ```
 
 **起動前準備**
+
 ```bash
 # 作業ディレクトリを作成
 mkdir -p workspace data
@@ -411,10 +448,12 @@ echo "Data file" > data/data.txt
 ```
 
 ### Notion MCP Server
+
 - **URL**: https://github.com/makenotion/notion-mcp-server
 - **概要**: Notion との連携（OAuth / トークン）。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.notion.yml
 version: '3.8'
@@ -438,10 +477,12 @@ services:
 ## 3) 開発／リポジトリ
 
 ### GitHub MCP Server
+
 - **URL**: https://github.com/github/github-mcp-server
 - **概要**: リポジトリ参照、Issue/PR 操作、ワークフローなど。
 
 **Docker Compose 構成（自前ホスト版）**
+
 ```yaml
 # docker-compose.github.yml
 version: '3.8'
@@ -460,6 +501,7 @@ services:
 ```
 
 **Hosted を直接利用する例（Responses API）**
+
 ```python
 tools=[{
   "type": "mcp",
@@ -473,10 +515,12 @@ tools=[{
 ## 4) Web／検索
 
 ### Web Search MCP
+
 - **URL**: https://github.com/pskill9/web-search
 - **概要**: 簡易 Web 検索 MCP（Node 実装）。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.websearch.yml
 version: '3.8'
@@ -498,10 +542,12 @@ services:
 ## 5) クラウド／インフラ
 
 ### Pulumi MCP Server
+
 - **URL**: https://github.com/pulumi/mcp-server
 - **概要**: Pulumi の情報取得／プレビュー／デプロイなど。
 
 **Docker Compose 構成**
+
 ```yaml
 # docker-compose.pulumi.yml
 version: '3.8'
@@ -619,6 +665,7 @@ networks:
 ```
 
 **リバースプロキシ設定例（nginx.conf）**
+
 ```nginx
 events {
     worker_connections 1024;
@@ -653,6 +700,7 @@ http {
 ```
 
 **統合環境の起動**
+
 ```bash
 # 全サービスを起動
 docker-compose -f docker-compose.all-mcp.yml up -d
@@ -673,6 +721,7 @@ docker-compose -f docker-compose.all-mcp.yml down -v
 ---
 
 ## Remote MCP を Responses API から使う際のポイント
+
 - **server_url は必須**：HTTP / SSE の公開 URL を指定。必要に応じて headers で認証情報を付与。
 - **allowed_tools で最小権限**：必要なツールのみ許可し、行動空間・リスク・コストを抑制。
 - **require_approval の運用**："never"（自動実行）/"always"（都度承認）/"auto" など、用途に応じて選択。
@@ -681,12 +730,14 @@ docker-compose -f docker-compose.all-mcp.yml down -v
 ## `stdio → HTTP/SSE` 変換（mcp-proxy）
 
 **インストール例**
+
 ```bash
 pip install uv
 uv tool install git+https://github.com/sparfenyuk/mcp-proxy
 ```
 
 **起動例（Node 系 MCP を HTTP 化して公開）**
+
 ```bash
 mcp-proxy --port 8000 --host 0.0.0.0 -- \
   npx -y @pinecone-database/mcp
@@ -695,6 +746,7 @@ mcp-proxy --port 8000 --host 0.0.0.0 -- \
 ```
 
 **Docker Compose での mcp-proxy 利用例**
+
 ```yaml
 # docker-compose.mcp-proxy.yml
 version: '3.8'
@@ -732,6 +784,7 @@ mcp.run(transport="http")
 ```
 
 **Docker Compose での FastMCP 利用例**
+
 ```yaml
 # docker-compose.fastmcp.yml
 version: '3.8'
@@ -753,6 +806,7 @@ services:
 ```
 
 **起動**
+
 ```bash
 pip install fastmcp
 python server.py
@@ -781,6 +835,7 @@ print(resp.output_text)
 ```
 
 **複数MCPサーバーを同時利用する例**
+
 ```python
 from openai import OpenAI
 client = OpenAI()
@@ -819,6 +874,7 @@ print(resp.output_text)
 ### Docker Composeの運用Tips
 
 **環境別設定ファイルの管理**
+
 ```bash
 # 開発環境
 docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
@@ -831,6 +887,7 @@ docker-compose up redis redis-mcp
 ```
 
 **ヘルスチェックとモニタリング**
+
 ```bash
 # 全サービスの状態確認
 docker-compose ps
@@ -843,6 +900,7 @@ docker stats
 ```
 
 **トラブルシューティング**
+
 ```bash
 # サービスの再起動
 docker-compose restart redis-mcp

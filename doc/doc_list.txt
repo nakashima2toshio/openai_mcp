@@ -1,3 +1,7 @@
+docker-compose の立ち上げ。
+
+docker-compose -f docker-compose.mcp-demo.yml up -d
+
 # ----------------------------------------------
 [調査スクリプト]:
 a_mcp_sample.pyのコードを精査し、
